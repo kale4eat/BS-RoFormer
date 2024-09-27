@@ -316,7 +316,7 @@ class MelBandRoformer(Module):
         num_stems = 1,
         time_transformer_depth = 2,
         freq_transformer_depth = 2,
-        linear_transformer_depth = 1,
+        linear_transformer_depth = 0,
         num_bands = 60,
         dim_head = 64,
         heads = 8,
@@ -361,11 +361,16 @@ class MelBandRoformer(Module):
         linear_flash_attn = default(linear_flash_attn, flash_attn)
 
         for _ in range(depth):
-            self.layers.append(nn.ModuleList([
-                Transformer(depth = linear_transformer_depth, linear_attn = True, flash_attn = linear_flash_attn, **transformer_kwargs) if linear_transformer_depth > 0 else None,
-                Transformer(depth = time_transformer_depth, rotary_embed = time_rotary_embed, flash_attn = flash_attn, **transformer_kwargs),
-                Transformer(depth = freq_transformer_depth, rotary_embed = freq_rotary_embed, flash_attn = flash_attn, **transformer_kwargs)
-            ]))
+            tran_modules = []
+            if linear_transformer_depth > 0:
+                tran_modules.append(Transformer(depth=linear_transformer_depth, linear_attn=True, **transformer_kwargs))
+            tran_modules.append(
+                Transformer(depth=time_transformer_depth, rotary_embed=time_rotary_embed, **transformer_kwargs)
+            )
+            tran_modules.append(
+                Transformer(depth=freq_transformer_depth, rotary_embed=freq_rotary_embed, **transformer_kwargs)
+            )
+            self.layers.append(nn.ModuleList(tran_modules))
 
         self.stft_window_fn = partial(default(stft_window_fn, torch.hann_window), stft_win_length)
 
@@ -376,7 +381,8 @@ class MelBandRoformer(Module):
             normalized = stft_normalized
         )
 
-        freqs = torch.stft(torch.randn(1, 4096), **self.stft_kwargs, return_complex = True).shape[1]
+        # refer: https://github.com/ZFTurbo/Music-Source-Separation-Training/pull/58
+        freqs = torch.stft(torch.randn(1, 4096), **self.stft_kwargs, window=torch.ones(stft_n_fft), return_complex = True).shape[1]
 
         # create mel filter bank
         # with librosa.filters.mel as in section 2 of paper
@@ -507,12 +513,16 @@ class MelBandRoformer(Module):
 
         # axial / hierarchical attention
 
-        for linear_transformer, time_transformer, freq_transformer in self.layers:
+        for transformer_block in self.layers:
 
-            if exists(linear_transformer):
+            if len(transformer_block) == 3:
+                linear_transformer, time_transformer, freq_transformer = transformer_block
+
                 x, ft_ps = pack([x], 'b * d')
                 x = linear_transformer(x)
                 x, = unpack(x, ft_ps, 'b * d')
+            else:
+                time_transformer, freq_transformer = transformer_block
 
             x = rearrange(x, 'b t f d -> b f t d')
             x, ps = pack([x], '* t d')

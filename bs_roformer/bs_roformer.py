@@ -257,6 +257,7 @@ class BSRoformer(Module):
         num_stems = 1,
         time_transformer_depth = 2,
         freq_transformer_depth = 2,
+        linear_transformer_depth=0,
         freqs_per_bands: Tuple[int, ...] = DEFAULT_FREQS_PER_BANDS,  # in the paper, they divide into ~60 bands, test with 1 for starters
         dim_head = 64,
         heads = 8,
@@ -298,10 +299,16 @@ class BSRoformer(Module):
         freq_rotary_embed = RotaryEmbedding(dim = dim_head)
 
         for _ in range(depth):
-            self.layers.append(nn.ModuleList([
-                Transformer(depth = time_transformer_depth, rotary_embed = time_rotary_embed, **transformer_kwargs),
-                Transformer(depth = freq_transformer_depth, rotary_embed = freq_rotary_embed, **transformer_kwargs)
-            ]))
+            tran_modules = []
+            if linear_transformer_depth > 0:
+                tran_modules.append(Transformer(depth=linear_transformer_depth, linear_attn=True, **transformer_kwargs))
+            tran_modules.append(
+                Transformer(depth=time_transformer_depth, rotary_embed=time_rotary_embed, **transformer_kwargs)
+            )
+            tran_modules.append(
+                Transformer(depth=freq_transformer_depth, rotary_embed=freq_rotary_embed, **transformer_kwargs)
+            )
+            self.layers.append(nn.ModuleList(tran_modules))
 
         self.final_norm = RMSNorm(dim)
 
